@@ -198,6 +198,13 @@ VALIDATE $? "Changing to $TOMCAT_BASE_DIR"
 # Download, Verify and Extract Tomcat
 # ------------------------------------------------------------
 
+# Remove a leftover/partial install (directory exists but is incomplete)
+if [ -d "$TOMCAT_HOME" ] && [ ! -f "$TOMCAT_HOME/bin/catalina.sh" ]; then
+    echo "Incomplete Tomcat directory found. Removing: $TOMCAT_HOME"
+    rm -rf "$TOMCAT_HOME"
+    VALIDATE $? "Removing incomplete Tomcat directory"
+fi
+
 if [ -d "$TOMCAT_HOME" ]; then
     SKIP "Tomcat $TOMCAT_VERSION download and extraction"
 else
@@ -226,11 +233,15 @@ else
     VALIDATE $? "Removing Tomcat archive"
 fi
 
-if [ ! -x "$TOMCAT_HOME/bin/catalina.sh" ]; then
-    echo "ERROR: Tomcat executable not found:"
+if [ ! -f "$TOMCAT_HOME/bin/catalina.sh" ]; then
+    echo "ERROR: Tomcat file not found:"
     echo "$TOMCAT_HOME/bin/catalina.sh"
     exit 1
 fi
+
+# Tomcat tarball scripts are not executable by default
+chmod +x "$TOMCAT_HOME"/bin/*.sh >> "$LOGFILE" 2>&1
+VALIDATE $? "Making Tomcat scripts executable"
 
 # ------------------------------------------------------------
 # Create Dedicated Service Account
@@ -332,8 +343,6 @@ chmod -R u=rwX,g=rX,o= "$TOMCAT_HOME" >> "$LOGFILE" 2>&1
 VALIDATE $? "Setting Tomcat permissions"
 
 # Directories Tomcat must write to at runtime
-mkdir -p "$TOMCAT_HOME/conf/Catalina"
-
 for DIR in logs temp work webapps conf/Catalina
 do
     mkdir -p "$TOMCAT_HOME/$DIR"
