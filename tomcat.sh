@@ -1,28 +1,19 @@
 #!/bin/bash
 
 # ============================================================
-# Apache Tomcat Installation Script
-# OS             : RHEL 10
-# Java           : OpenJDK 21
-# Default Tomcat : Latest stable Tomcat 9.x
-# Install path   : /opt/tomcat
-# Service user   : tomcat
-# Service name   : tomcat
+# Java 21 + Latest Stable Apache Tomcat
+# Operating System: RHEL 10
+# Default Tomcat  : Latest 9.x  (override: TOMCAT_MAJOR=10 or 11)
+# Install path    : /opt/tomcat
+# Service user    : tomcat
+# Service name    : tomcat
 #
 # Usage:
 #   sudo bash tomcat.sh
-#
-# Optional:
 #   sudo env TOMCAT_MAJOR=10 bash tomcat.sh
-#   sudo env TOMCAT_MAJOR=11 bash tomcat.sh
-#
-# Admin password:
-#   Enter interactively when prompted, or supply
-#   TOMCAT_ADMIN_PASSWORD through a secure environment.
 # ============================================================
 
-set -Eeuo pipefail
-umask 027
+set -o pipefail
 
 # ------------------------------------------------------------
 # Configuration
@@ -34,400 +25,365 @@ TOMCAT_MAJOR="${TOMCAT_MAJOR:-9}"
 TOMCAT_BASE_DIR="/opt"
 TOMCAT_SYMLINK="/opt/tomcat"
 TOMCAT_USER="tomcat"
-
-TOMCAT_ADMIN_USER="${TOMCAT_ADMIN_USER:-admin}"
-TOMCAT_ADMIN_PASSWORD="${TOMCAT_ADMIN_PASSWORD:-}"
-
 TOMCAT_INDEX_URL="https://dlcdn.apache.org/tomcat/tomcat-${TOMCAT_MAJOR}/"
 
 PROFILE_FILE="/etc/profile.d/tomcat.sh"
 SERVICE_FILE="/etc/systemd/system/tomcat.service"
+RUN_SYSTEM_UPDATE="${RUN_SYSTEM_UPDATE:-false}"
 
-LOGFILE="/var/log/tomcat-install-$(date +%F-%H-%M-%S).log"
-
-# ------------------------------------------------------------
-# Root Check
-# ------------------------------------------------------------
-
-if [[ "$EUID" -ne 0 ]]; then
-    echo "ERROR: Run this script with root privileges."
-    echo "Example: sudo bash tomcat.sh"
-    exit 1
-fi
-
-# ------------------------------------------------------------
-# Logging
-# ------------------------------------------------------------
-
-touch "$LOGFILE"
-chmod 600 "$LOGFILE"
-
-exec > >(tee -a "$LOGFILE") 2>&1
+LOGFILE="/tmp/tomcat-install-$(date +%F-%H-%M-%S).log"
 
 # ------------------------------------------------------------
 # Functions
 # ------------------------------------------------------------
 
-log() {
-    printf '[INFO] %s\n' "$*"
+VALIDATE() {
+    local STATUS="$1"
+    local MESSAGE="$2"
+
+    if [ "$STATUS" -eq 0 ]; then
+        echo "$MESSAGE... SUCCESS"
+    else
+        echo "$MESSAGE... FAILURE"
+        echo "Check log file: $LOGFILE"
+        exit 1
+    fi
 }
 
-die() {
-    printf '[ERROR] %s\n' "$*" >&2
-    printf 'Log file: %s\n' "$LOGFILE" >&2
+SKIP() {
+    echo "$1... SKIPPING (already done)"
+}
+
+# ------------------------------------------------------------
+# Root Check
+# ------------------------------------------------------------
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "ERROR: Run this script with root access."
+    echo "Command: sudo bash tomcat.sh"
+    exit 1
+fi
+
+touch "$LOGFILE" || {
+    echo "ERROR: Cannot create log file."
     exit 1
 }
 
-validate() {
-    local status="$1"
-    local message="$2"
-
-    if [[ "$status" -eq 0 ]]; then
-        log "$message: SUCCESS"
-    else
-        die "$message: FAILED"
-    fi
-}
-
-# ------------------------------------------------------------
-# Validate Configuration
-# ------------------------------------------------------------
-
 case "$TOMCAT_MAJOR" in
-    9|10|11)
-        ;;
+    9|10|11) ;;
     *)
-        die "TOMCAT_MAJOR must be 9, 10, or 11."
+        echo "ERROR: TOMCAT_MAJOR must be 9, 10, or 11."
+        exit 1
         ;;
 esac
 
-if [[ ! "$TOMCAT_ADMIN_USER" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    die "Invalid admin username."
-fi
-
-if [[ -z "$TOMCAT_ADMIN_PASSWORD" ]]; then
-    if [[ ! -t 0 ]]; then
-        die "Set TOMCAT_ADMIN_PASSWORD securely when running non-interactively."
-    fi
-
-    read -r -s -p "Enter Tomcat admin password: " TOMCAT_ADMIN_PASSWORD
-    echo
-
-    read -r -s -p "Confirm Tomcat admin password: " CONFIRM_PASSWORD
-    echo
-
-    if [[ "$TOMCAT_ADMIN_PASSWORD" != "$CONFIRM_PASSWORD" ]]; then
-        die "Passwords do not match."
-    fi
-
-    unset CONFIRM_PASSWORD
-fi
-
-if (( ${#TOMCAT_ADMIN_PASSWORD} < 15 )); then
-    die "Use an admin password of at least 15 characters."
-fi
-
-# ------------------------------------------------------------
-# Start
-# ------------------------------------------------------------
-
 echo
 echo "============================================================"
-echo " Apache Tomcat Installation"
+echo " Java + Latest Tomcat ${TOMCAT_MAJOR}.x Installation"
 echo "============================================================"
-echo "Java version : $JAVA_VERSION"
-echo "Tomcat major : $TOMCAT_MAJOR"
-echo "Install path : $TOMCAT_SYMLINK"
-echo "Service user : $TOMCAT_USER"
-echo "Log file     : $LOGFILE"
+echo
+echo "Java Version : $JAVA_VERSION"
+echo "Tomcat Major : $TOMCAT_MAJOR"
+echo "Tomcat Home  : $TOMCAT_SYMLINK"
+echo "Service User : $TOMCAT_USER"
+echo "Log File     : $LOGFILE"
 echo
 
 # ------------------------------------------------------------
-# Install Required Packages
+# Optional System Update
 # ------------------------------------------------------------
 
-log "Installing required packages"
-
-dnf install -y \
-    curl \
-    wget \
-    tar \
-    gzip \
-    python3 \
-    "java-${JAVA_VERSION}-openjdk-devel"
-
-validate $? "Installing packages"
+if [ "$RUN_SYSTEM_UPDATE" = "true" ]; then
+    dnf update -y --allowerasing >> "$LOGFILE" 2>&1
+    VALIDATE $? "System package update"
+else
+    SKIP "System package update"
+fi
 
 # ------------------------------------------------------------
-# Detect Java
+# Required Packages
 # ------------------------------------------------------------
 
-JAVA_BIN="$(command -v javac || true)"
+MISSING_PKGS=""
 
-[[ -n "$JAVA_BIN" ]] || die "javac not found."
+for PKG in wget curl tar gzip
+do
+    if ! rpm -q "$PKG" >/dev/null 2>&1; then
+        MISSING_PKGS="$MISSING_PKGS $PKG"
+    fi
+done
 
-JAVA_HOME_PATH="$(dirname "$(dirname "$(readlink -f "$JAVA_BIN")")")"
+if [ -n "$MISSING_PKGS" ]; then
+    dnf install -y $MISSING_PKGS >> "$LOGFILE" 2>&1
+    VALIDATE $? "Installing required packages"
+else
+    SKIP "Required packages"
+fi
 
-[[ -x "$JAVA_HOME_PATH/bin/java" ]] || die "Java executable not found."
+# ------------------------------------------------------------
+# Install Java 21 JDK
+# ------------------------------------------------------------
+
+if rpm -q "java-${JAVA_VERSION}-openjdk-devel" >/dev/null 2>&1; then
+    SKIP "Java ${JAVA_VERSION} JDK"
+else
+    dnf install -y "java-${JAVA_VERSION}-openjdk-devel" \
+        >> "$LOGFILE" 2>&1
+    VALIDATE $? "Installing Java ${JAVA_VERSION} JDK"
+fi
+
+JAVAC_PATH=$(command -v javac)
+
+if [ -z "$JAVAC_PATH" ]; then
+    echo "ERROR: javac was not found."
+    exit 1
+fi
+
+JAVA_HOME_PATH=$(dirname "$(dirname "$(readlink -f "$JAVAC_PATH")")")
+
+if [ ! -x "$JAVA_HOME_PATH/bin/java" ]; then
+    echo "ERROR: Java executable not found under $JAVA_HOME_PATH"
+    exit 1
+fi
 
 export JAVA_HOME="$JAVA_HOME_PATH"
 export PATH="$JAVA_HOME/bin:$PATH"
 
-log "Java installation:"
-"$JAVA_HOME/bin/java" -version
-"$JAVA_HOME/bin/javac" -version
+"$JAVA_HOME/bin/java" -version >> "$LOGFILE" 2>&1
+VALIDATE $? "Checking Java installation"
 
-# # ------------------------------------------------------------
-# # Detect Latest Stable Tomcat Version
-# # ------------------------------------------------------------
-
-# log "Detecting latest Tomcat ${TOMCAT_MAJOR}.x release"
-
-# TOMCAT_LISTING="$(
-#     curl -fsSL --retry 3 "$TOMCAT_INDEX_URL"
-# )" || die "Unable to access Apache Tomcat release index."
-
-# TOMCAT_VERSION="$(
-#     printf '%s\n' "$TOMCAT_LISTING" |
-#         grep -oP 'href="\Kv[0-9]+\.[0-9]+\.[0-9]+(?=/")' |
-#         sed 's/^v//' |
-#         awk -v major="$TOMCAT_MAJOR" \
-#             'BEGIN { FS="." }
-#              $1 == major && (major != 10 || $2 == 1) { print }' |
-#         sort -Vu |
-#         tail -n 1
-# )"
-
-# [[ -n "$TOMCAT_VERSION" ]] ||
-#     die "Unable to detect a supported Tomcat release."
-
-# log "Selected Tomcat version: $TOMCAT_VERSION"
-
-# # ------------------------------------------------------------
-# # Download and Verify Tomcat
-# # ------------------------------------------------------------
-
-# TOMCAT_HOME="${TOMCAT_BASE_DIR}/apache-tomcat-${TOMCAT_VERSION}"
-# TOMCAT_ARCHIVE="apache-tomcat-${TOMCAT_VERSION}.tar.gz"
-# TOMCAT_URL="${TOMCAT_INDEX_URL}v${TOMCAT_VERSION}/bin/${TOMCAT_ARCHIVE}"
-
-# if [[ ! -d "$TOMCAT_HOME" ]]; then
-
-#     TEMP_DIR="$(mktemp -d /tmp/tomcat-install.XXXXXX)"
-#     trap 'rm -rf "${TEMP_DIR:-}"' EXIT
-
-#     log "Downloading Tomcat $TOMCAT_VERSION"
-
-#     curl -fL --retry 3 \
-#         "$TOMCAT_URL" \
-#         -o "$TEMP_DIR/$TOMCAT_ARCHIVE"
-
-#     validate $? "Downloading Tomcat"
-
-#     log "Downloading SHA512 checksum"
-
-#     curl -fsSL --retry 3 \
-#         "${TOMCAT_URL}.sha512" \
-#         -o "$TEMP_DIR/checksum.txt"
-
-#     validate $? "Downloading checksum"
-
-#     EXPECTED_SHA="$(
-#         grep -oE '[[:xdigit:]]{128}' "$TEMP_DIR/checksum.txt" |
-#             head -n 1
-#     )"
-
-#     [[ -n "$EXPECTED_SHA" ]] ||
-#         die "Invalid or missing SHA512 checksum."
-
-#     ACTUAL_SHA="$(
-#         sha512sum "$TEMP_DIR/$TOMCAT_ARCHIVE" |
-#             awk '{print $1}'
-#     )"
-
-#     [[ "${ACTUAL_SHA,,}" == "${EXPECTED_SHA,,}" ]] ||
-#         die "Tomcat SHA512 verification failed."
-
-#     log "SHA512 verification: SUCCESS"
-
-#     # Extract into a staging directory first.
-#     mkdir "$TEMP_DIR/extracted"
-
-#     tar -xzf "$TEMP_DIR/$TOMCAT_ARCHIVE" \
-#         -C "$TEMP_DIR/extracted"
-
-#     validate $? "Extracting Tomcat"
-
-#     [[ -d "$TEMP_DIR/extracted/apache-tomcat-${TOMCAT_VERSION}" ]] ||
-#         die "Unexpected Tomcat archive layout."
-
-#     mv "$TEMP_DIR/extracted/apache-tomcat-${TOMCAT_VERSION}" \
-#         "$TOMCAT_HOME"
-
-#     validate $? "Installing Tomcat files"
-
-# else
-#     log "Tomcat $TOMCAT_VERSION already exists; skipping download."
-# fi
-
-# # ------------------------------------------------------------
-# # Create Dedicated Service Account
-# # ------------------------------------------------------------
-
-# if id "$TOMCAT_USER" >/dev/null 2>&1; then
-#     log "Service account $TOMCAT_USER already exists."
-# else
-#     useradd \
-#         --system \
-#         --home-dir "$TOMCAT_SYMLINK" \
-#         --shell /sbin/nologin \
-#         "$TOMCAT_USER"
-
-#     validate $? "Creating Tomcat service account"
-# fi
-
-# # ------------------------------------------------------------
-# # Configure Tomcat Admin User
-# # ------------------------------------------------------------
-# # Remove XML comments before changing active entries.
-# # Preserve other active users and insert exactly one admin user.
-
-# TOMCAT_USERS_FILE="$TOMCAT_HOME/conf/tomcat-users.xml"
-
-# [[ -f "$TOMCAT_USERS_FILE" ]] ||
-#     die "Missing file: $TOMCAT_USERS_FILE"
-
-# export TOMCAT_ADMIN_USER TOMCAT_ADMIN_PASSWORD
-
-# python3 - "$TOMCAT_USERS_FILE" <<'PYTHON'
-# import os
-# import re
-# import sys
-# import tempfile
-# import xml.etree.ElementTree as ET
-# from pathlib import Path
-# from xml.sax.saxutils import escape, quoteattr
-
-# path = Path(sys.argv[1])
-# content = path.read_text(encoding="utf-8")
-
-# # Remove XML comments so example users in comments are not
-# # accidentally treated as active user entries.
-# content = re.sub(r"<!--.*?-->", "", content, flags=re.S)
-
-# username = os.environ["TOMCAT_ADMIN_USER"]
-# password = os.environ["TOMCAT_ADMIN_PASSWORD"]
-
-# # Remove any active entry for this admin username.
-# user_pattern = re.compile(
-#     r"<user\b(?=[^>]*\busername\s*=\s*"
-#     + quoteattr(username)
-#     + r")(?=[^>]*?/?>)[^>]*/\s*>",
-#     flags=re.S,
-# )
-# content = user_pattern.sub("", content)
-
-# # XML-escape the password to keep the XML valid.
-# escaped_password = escape(password, {'"': "&quot;", "'": "&apos;"})
-
-# admin_entry = (
-#     f'  <user username="{username}" '
-#     f'password="{escaped_password}" '
-#     'roles="manager-gui,admin-gui"/>'
-# )
-
-# if not re.search(r"</tomcat-users\s*>", content, flags=re.I):
-#     raise SystemExit("ERROR: Missing closing tomcat-users element.")
-
-# content = re.sub(
-#     r"</tomcat-users\s*>",
-#     admin_entry + "\n</tomcat-users>",
-#     content,
-#     count=1,
-#     flags=re.I,
-# )
-
-# # Validate the generated XML before replacing the original.
-# ET.fromstring(content)
-
-# fd, temp_name = tempfile.mkstemp(
-#     prefix="tomcat-users.",
-#     dir=str(path.parent),
-#     text=True,
-# )
-
-# try:
-#     with os.fdopen(fd, "w", encoding="utf-8") as stream:
-#         stream.write(content)
-#         stream.flush()
-#         os.fsync(stream.fileno())
-
-#     os.chmod(temp_name, 0o640)
-#     os.replace(temp_name, path)
-# except Exception:
-#     try:
-#         os.unlink(temp_name)
-#     except FileNotFoundError:
-#         pass
-#     raise
-
-# print("Tomcat admin user configured and XML validated.")
-# PYTHON
-
-# validate $? "Configuring Tomcat admin user"
-
-# unset TOMCAT_ADMIN_PASSWORD
+"$JAVA_HOME/bin/javac" -version >> "$LOGFILE" 2>&1
+VALIDATE $? "Checking Java compiler"
 
 # ------------------------------------------------------------
-# Secure File Ownership and Permissions
+# Detect Latest Stable Tomcat Version
 # ------------------------------------------------------------
 
-chown -R root:"$TOMCAT_USER" "$TOMCAT_HOME"
-validate $? "Setting Tomcat installation ownership"
+echo
+echo "Detecting latest stable Tomcat ${TOMCAT_MAJOR}.x version..."
 
-# Root can modify files; Tomcat group can read and execute.
-chmod -R u=rwX,g=rX,o= "$TOMCAT_HOME"
-validate $? "Setting Tomcat installation permissions"
+TOMCAT_VERSION=$(
+    curl -fsSL "$TOMCAT_INDEX_URL" 2>> "$LOGFILE" |
+        grep -oP "href=\"v\K${TOMCAT_MAJOR}\.[0-9]+\.[0-9]+(?=/\")" |
+        sort -Vu |
+        tail -n 1
+)
 
-# Tomcat needs write access to runtime directories only.
-for DIR in logs temp work
+if [ -z "$TOMCAT_VERSION" ]; then
+    echo "ERROR: Could not detect the latest Tomcat ${TOMCAT_MAJOR}.x version."
+    echo "URL: $TOMCAT_INDEX_URL"
+    echo "Check log: $LOGFILE"
+    exit 1
+fi
+
+echo "Latest Tomcat ${TOMCAT_MAJOR}.x Version: $TOMCAT_VERSION"
+
+# ------------------------------------------------------------
+# Tomcat Paths
+# ------------------------------------------------------------
+
+TOMCAT_HOME="${TOMCAT_BASE_DIR}/apache-tomcat-${TOMCAT_VERSION}"
+TOMCAT_ARCHIVE="apache-tomcat-${TOMCAT_VERSION}.tar.gz"
+TOMCAT_URL="${TOMCAT_INDEX_URL}v${TOMCAT_VERSION}/bin/${TOMCAT_ARCHIVE}"
+TOMCAT_USERS_FILE="${TOMCAT_HOME}/conf/tomcat-users.xml"
+
+echo "Tomcat URL  : $TOMCAT_URL"
+echo "Tomcat Home : $TOMCAT_HOME"
+echo
+
+cd "$TOMCAT_BASE_DIR" >> "$LOGFILE" 2>&1
+VALIDATE $? "Changing to $TOMCAT_BASE_DIR"
+
+# ------------------------------------------------------------
+# Download, Verify and Extract Tomcat
+# ------------------------------------------------------------
+
+if [ -d "$TOMCAT_HOME" ]; then
+    SKIP "Tomcat $TOMCAT_VERSION download and extraction"
+else
+    wget -q "$TOMCAT_URL" -O "$TOMCAT_ARCHIVE" \
+        >> "$LOGFILE" 2>&1
+    VALIDATE $? "Downloading Tomcat"
+
+    EXPECTED_SHA=$(
+        curl -fsSL "${TOMCAT_URL}.sha512" 2>> "$LOGFILE" |
+            awk '{print $1}'
+    )
+
+    if [ -z "$EXPECTED_SHA" ]; then
+        echo "ERROR: Could not retrieve the Tomcat SHA512 checksum."
+        exit 1
+    fi
+
+    echo "${EXPECTED_SHA}  ${TOMCAT_ARCHIVE}" |
+        sha512sum -c - >> "$LOGFILE" 2>&1
+    VALIDATE $? "Verifying Tomcat SHA512 checksum"
+
+    tar -xzf "$TOMCAT_ARCHIVE" >> "$LOGFILE" 2>&1
+    VALIDATE $? "Extracting Tomcat"
+
+    rm -f "$TOMCAT_ARCHIVE"
+    VALIDATE $? "Removing Tomcat archive"
+fi
+
+if [ ! -x "$TOMCAT_HOME/bin/catalina.sh" ]; then
+    echo "ERROR: Tomcat executable not found:"
+    echo "$TOMCAT_HOME/bin/catalina.sh"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Create Dedicated Service Account
+# ------------------------------------------------------------
+
+if id "$TOMCAT_USER" >/dev/null 2>&1; then
+    SKIP "Service account $TOMCAT_USER"
+else
+    useradd --system \
+        --home-dir "$TOMCAT_SYMLINK" \
+        --shell /sbin/nologin \
+        "$TOMCAT_USER" >> "$LOGFILE" 2>&1
+    VALIDATE $? "Creating Tomcat service account"
+fi
+
+# ------------------------------------------------------------
+# Configure tomcat-users.xml (content written exactly as provided)
+# ------------------------------------------------------------
+
+if [ ! -f "${TOMCAT_USERS_FILE}.orig" ]; then
+    cp -p "$TOMCAT_USERS_FILE" "${TOMCAT_USERS_FILE}.orig" \
+        >> "$LOGFILE" 2>&1
+    VALIDATE $? "Backing up original tomcat-users.xml"
+else
+    SKIP "tomcat-users.xml backup"
+fi
+
+cat > "$TOMCAT_USERS_FILE" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<tomcat-users xmlns="http://tomcat.apache.org/xml"
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              xsi:schemaLocation="http://tomcat.apache.org/xml tomcat-users.xsd"
+              version="1.0">
+<!--
+  By default, no user is included in the "manager-gui" role required
+  to operate the "/manager/html" web application.  If you wish to use this app,
+  you must define such a user - the username and password are arbitrary.
+
+  Built-in Tomcat manager roles:
+    - manager-gui    - allows access to the HTML GUI and the status pages
+    - manager-script - allows access to the HTTP API and the status pages
+    - manager-jmx    - allows access to the JMX proxy and the status pages
+    - manager-status - allows access to the status pages only
+
+  The users below are wrapped in a comment and are therefore ignored. If you
+  wish to configure one or more of these users for use with the manager web
+  application, do not forget to remove the <!.. ..> that surrounds them. You
+  will also need to set the passwords to something appropriate.
+-->
+<!--
+  <user username="admin" password="<must-be-changed>" roles="manager-gui"/>
+  <user username="robot" password="<must-be-changed>" roles="manager-script"/>
+-->
+  <user username="admin" password="Bangalore@2026" roles="manager-gui,admin-gui"/>
+  <user username="admin" password="Bangalore@20256" roles="manager-gui,admin-gui"/>
+<!--
+  The sample user and role entries below are intended for use with the
+  examples web application. They are wrapped in a comment and thus are ignored
+  when reading this file. If you wish to configure these users for use with the
+  examples web application, do not forget to remove the <!.. ..> that surrounds
+  them. You will also need to set the passwords to something appropriate.
+-->
+<!--
+  <role rolename="tomcat"/>
+  <role rolename="role1"/>
+  <user username="tomcat" password="<must-be-changed>" roles="tomcat"/>
+  <user username="both" password="<must-be-changed>" roles="tomcat,role1"/>
+  <user username="role1" password="<must-be-changed>" roles="role1"/>
+-->
+</tomcat-users>
+EOF
+
+VALIDATE $? "Writing tomcat-users.xml"
+
+# ------------------------------------------------------------
+# Ownership and Permissions
+# ------------------------------------------------------------
+
+chown -R root:"$TOMCAT_USER" "$TOMCAT_HOME" >> "$LOGFILE" 2>&1
+VALIDATE $? "Setting Tomcat ownership"
+
+chmod -R u=rwX,g=rX,o= "$TOMCAT_HOME" >> "$LOGFILE" 2>&1
+VALIDATE $? "Setting Tomcat permissions"
+
+# Directories Tomcat must write to at runtime
+mkdir -p "$TOMCAT_HOME/conf/Catalina"
+
+for DIR in logs temp work webapps conf/Catalina
 do
     mkdir -p "$TOMCAT_HOME/$DIR"
     chown -R "$TOMCAT_USER":"$TOMCAT_USER" "$TOMCAT_HOME/$DIR"
-    chmod 750 "$TOMCAT_HOME/$DIR"
+    chmod -R u=rwX,g=rX,o= "$TOMCAT_HOME/$DIR"
 done
+VALIDATE $? "Setting runtime directory permissions"
 
 chown root:"$TOMCAT_USER" "$TOMCAT_USERS_FILE"
 chmod 640 "$TOMCAT_USERS_FILE"
+VALIDATE $? "Securing tomcat-users.xml"
 
 chmod 750 "$TOMCAT_HOME"/bin/*.sh
+VALIDATE $? "Setting script permissions"
 
 # ------------------------------------------------------------
-# Create Stable Symlink
+# Create Stable Tomcat Symlink
 # /opt/tomcat -> /opt/apache-tomcat-<version>
 # ------------------------------------------------------------
 
-if [[ -e "$TOMCAT_SYMLINK" && ! -L "$TOMCAT_SYMLINK" ]]; then
-    die "$TOMCAT_SYMLINK exists and is not a symlink. Inspect it first."
+if [ -e "$TOMCAT_SYMLINK" ] && [ ! -L "$TOMCAT_SYMLINK" ]; then
+    echo "ERROR: $TOMCAT_SYMLINK exists and is not a symbolic link."
+    echo "Inspect it before replacing anything."
+    exit 1
 fi
 
-ln -sfn "$TOMCAT_HOME" "$TOMCAT_SYMLINK"
-validate $? "Creating Tomcat symbolic link"
+if [ "$(readlink -f "$TOMCAT_SYMLINK" 2>/dev/null)" = "$TOMCAT_HOME" ]; then
+    SKIP "Tomcat symbolic link"
+else
+    ln -sfn "$TOMCAT_HOME" "$TOMCAT_SYMLINK" \
+        >> "$LOGFILE" 2>&1
+    VALIDATE $? "Creating Tomcat symbolic link"
+fi
 
 # ------------------------------------------------------------
-# Configure Environment Variables
+# Configure Permanent Environment Variables
 # ------------------------------------------------------------
 
 cat > "$PROFILE_FILE" <<EOF
-# Apache Tomcat
+# Apache Tomcat and Java
 export JAVA_HOME="$JAVA_HOME_PATH"
 export CATALINA_HOME="$TOMCAT_SYMLINK"
 export CATALINA_BASE="$TOMCAT_SYMLINK"
 export PATH="\$CATALINA_HOME/bin:\$JAVA_HOME/bin:\$PATH"
 EOF
 
+VALIDATE $? "Configuring environment variables"
+
 chmod 644 "$PROFILE_FILE"
-validate $? "Configuring Tomcat environment variables"
+VALIDATE $? "Setting profile permissions"
 
 # ------------------------------------------------------------
 # Configure systemd Service
@@ -469,58 +425,54 @@ ProtectSystem=full
 WantedBy=multi-user.target
 EOF
 
+VALIDATE $? "Creating systemd service file"
+
 chmod 644 "$SERVICE_FILE"
+VALIDATE $? "Setting service file permissions"
 
-systemctl daemon-reload
-validate $? "Reloading systemd"
+systemctl daemon-reload >> "$LOGFILE" 2>&1
+VALIDATE $? "Reloading systemd"
 
-systemctl enable tomcat
-validate $? "Enabling Tomcat at boot"
+systemctl enable tomcat >> "$LOGFILE" 2>&1
+VALIDATE $? "Enabling Tomcat at boot"
 
-# ------------------------------------------------------------
-# Start / Restart Tomcat
-# ------------------------------------------------------------
-
-log "Restarting Tomcat"
-
-systemctl restart tomcat
-validate $? "Starting Tomcat service"
+systemctl restart tomcat >> "$LOGFILE" 2>&1
+VALIDATE $? "Starting Tomcat service"
 
 # ------------------------------------------------------------
 # Verify Service and HTTP Connector
 # ------------------------------------------------------------
 
-log "Waiting for Tomcat on port 8080"
+echo
+echo "Waiting for Tomcat on port 8080..."
 
 HTTP_STATUS="000"
 
 for ATTEMPT in {1..30}
 do
-    HTTP_STATUS="$(
-        curl -sS \
-            --connect-timeout 2 \
-            --max-time 3 \
-            -o /dev/null \
-            -w '%{http_code}' \
-            http://127.0.0.1:8080/ 2>/dev/null || true
-    )"
+    HTTP_STATUS=$(
+        curl -sS --connect-timeout 2 --max-time 3 \
+            -o /dev/null -w '%{http_code}' \
+            http://127.0.0.1:8080/ 2>/dev/null
+    )
 
-    if [[ "$HTTP_STATUS" != "000" ]]; then
+    if [ "$HTTP_STATUS" != "000" ]; then
         break
     fi
 
     sleep 2
 done
 
-[[ "$HTTP_STATUS" != "000" ]] ||
-    {
-        systemctl status tomcat --no-pager || true
-        journalctl -u tomcat -n 50 --no-pager || true
-        die "Tomcat did not respond on port 8080."
-    }
+if [ "$HTTP_STATUS" = "000" ]; then
+    systemctl status tomcat --no-pager >> "$LOGFILE" 2>&1
+    journalctl -u tomcat -n 50 --no-pager >> "$LOGFILE" 2>&1
+    echo "ERROR: Tomcat did not respond on port 8080."
+    echo "Check log file: $LOGFILE"
+    exit 1
+fi
 
-systemctl is-active --quiet tomcat ||
-    die "Tomcat systemd service is not active."
+systemctl is-active --quiet tomcat
+VALIDATE $? "Checking Tomcat service status"
 
 # ------------------------------------------------------------
 # Installation Summary
@@ -533,12 +485,12 @@ echo "============================================================"
 echo
 
 echo "Java Version:"
-"$JAVA_HOME_PATH/bin/java" -version
+"$JAVA_HOME/bin/java" -version
 
 echo
 echo "Tomcat Version:"
 "$TOMCAT_SYMLINK/bin/version.sh" 2>&1 |
-    grep -E 'Server version|Server number|JVM Version' || true
+    grep -E 'Server version|Server number|JVM Version'
 
 echo
 echo "Tomcat Home     : $TOMCAT_SYMLINK"
@@ -548,13 +500,8 @@ echo "Service         : $(systemctl is-active tomcat)"
 echo "HTTP Status     : $HTTP_STATUS"
 echo "Application URL : http://<server-ip>:8080"
 echo "Manager URL     : http://<server-ip>:8080/manager/html"
-echo "Admin Username  : $TOMCAT_ADMIN_USER"
 echo "Log File        : $LOGFILE"
 echo
 echo "Check service: systemctl status tomcat"
 echo "View logs    : journalctl -u tomcat -f"
-echo
-echo "Security: Tomcat Manager remote access remains restricted"
-echo "by the default application context configuration."
-echo "Restrict port 8080 using your AWS Security Group."
 echo "============================================================"
