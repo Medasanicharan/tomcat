@@ -312,7 +312,6 @@ cat > "$TOMCAT_USERS_FILE" <<'EOF'
   <user username="robot" password="<must-be-changed>" roles="manager-script"/>
 -->
   <user username="admin" password="Bangalore@2026" roles="manager-gui,admin-gui"/>
-  <user username="admin" password="Bangalore@20256" roles="manager-gui,admin-gui"/>
 <!--
   The sample user and role entries below are intended for use with the
   examples web application. They are wrapped in a comment and thus are ignored
@@ -331,6 +330,37 @@ cat > "$TOMCAT_USERS_FILE" <<'EOF'
 EOF
 
 VALIDATE $? "Writing tomcat-users.xml"
+
+# ------------------------------------------------------------
+# Comment out RemoteCIDRValve (manager and host-manager)
+# Only the Valve lines are commented; the rest of each file is unchanged.
+# ------------------------------------------------------------
+
+for APP in manager host-manager
+do
+    CONTEXT_FILE="${TOMCAT_HOME}/webapps/${APP}/META-INF/context.xml"
+
+    if [ ! -f "$CONTEXT_FILE" ]; then
+        echo "ERROR: File not found: $CONTEXT_FILE"
+        exit 1
+    fi
+
+    if grep -q '<!-- *<Valve className="org.apache.catalina.valves.RemoteCIDRValve"' "$CONTEXT_FILE"; then
+        SKIP "RemoteCIDRValve comment in ${APP}/context.xml"
+    else
+        if [ ! -f "${CONTEXT_FILE}.orig" ]; then
+            cp -p "$CONTEXT_FILE" "${CONTEXT_FILE}.orig" \
+                >> "$LOGFILE" 2>&1
+            VALIDATE $? "Backing up ${APP}/context.xml"
+        fi
+
+        sed -i '/<Valve className="org.apache.catalina.valves.RemoteCIDRValve"/,/\/>/{
+            /<Valve/s/<Valve/<!-- <Valve/
+            /\/>/s/\/>/\/> -->/
+        }' "$CONTEXT_FILE" >> "$LOGFILE" 2>&1
+        VALIDATE $? "Commenting RemoteCIDRValve in ${APP}/context.xml"
+    fi
+done
 
 # ------------------------------------------------------------
 # Ownership and Permissions
@@ -509,6 +539,7 @@ echo "Service         : $(systemctl is-active tomcat)"
 echo "HTTP Status     : $HTTP_STATUS"
 echo "Application URL : http://<server-ip>:8080"
 echo "Manager URL     : http://<server-ip>:8080/manager/html"
+echo "Host Manager URL: http://<server-ip>:8080/host-manager/html"
 echo "Log File        : $LOGFILE"
 echo
 echo "Check service: systemctl status tomcat"
