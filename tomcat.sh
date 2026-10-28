@@ -177,206 +177,206 @@ log "Java installation:"
 "$JAVA_HOME/bin/java" -version
 "$JAVA_HOME/bin/javac" -version
 
-# ------------------------------------------------------------
-# Detect Latest Stable Tomcat Version
-# ------------------------------------------------------------
+# # ------------------------------------------------------------
+# # Detect Latest Stable Tomcat Version
+# # ------------------------------------------------------------
 
-log "Detecting latest Tomcat ${TOMCAT_MAJOR}.x release"
+# log "Detecting latest Tomcat ${TOMCAT_MAJOR}.x release"
 
-TOMCAT_LISTING="$(
-    curl -fsSL --retry 3 "$TOMCAT_INDEX_URL"
-)" || die "Unable to access Apache Tomcat release index."
+# TOMCAT_LISTING="$(
+#     curl -fsSL --retry 3 "$TOMCAT_INDEX_URL"
+# )" || die "Unable to access Apache Tomcat release index."
 
-TOMCAT_VERSION="$(
-    printf '%s\n' "$TOMCAT_LISTING" |
-        grep -oP 'href="\Kv[0-9]+\.[0-9]+\.[0-9]+(?=/")' |
-        sed 's/^v//' |
-        awk -v major="$TOMCAT_MAJOR" \
-            'BEGIN { FS="." }
-             $1 == major && (major != 10 || $2 == 1) { print }' |
-        sort -Vu |
-        tail -n 1
-)"
+# TOMCAT_VERSION="$(
+#     printf '%s\n' "$TOMCAT_LISTING" |
+#         grep -oP 'href="\Kv[0-9]+\.[0-9]+\.[0-9]+(?=/")' |
+#         sed 's/^v//' |
+#         awk -v major="$TOMCAT_MAJOR" \
+#             'BEGIN { FS="." }
+#              $1 == major && (major != 10 || $2 == 1) { print }' |
+#         sort -Vu |
+#         tail -n 1
+# )"
 
-[[ -n "$TOMCAT_VERSION" ]] ||
-    die "Unable to detect a supported Tomcat release."
+# [[ -n "$TOMCAT_VERSION" ]] ||
+#     die "Unable to detect a supported Tomcat release."
 
-log "Selected Tomcat version: $TOMCAT_VERSION"
+# log "Selected Tomcat version: $TOMCAT_VERSION"
 
-# ------------------------------------------------------------
-# Download and Verify Tomcat
-# ------------------------------------------------------------
+# # ------------------------------------------------------------
+# # Download and Verify Tomcat
+# # ------------------------------------------------------------
 
-TOMCAT_HOME="${TOMCAT_BASE_DIR}/apache-tomcat-${TOMCAT_VERSION}"
-TOMCAT_ARCHIVE="apache-tomcat-${TOMCAT_VERSION}.tar.gz"
-TOMCAT_URL="${TOMCAT_INDEX_URL}v${TOMCAT_VERSION}/bin/${TOMCAT_ARCHIVE}"
+# TOMCAT_HOME="${TOMCAT_BASE_DIR}/apache-tomcat-${TOMCAT_VERSION}"
+# TOMCAT_ARCHIVE="apache-tomcat-${TOMCAT_VERSION}.tar.gz"
+# TOMCAT_URL="${TOMCAT_INDEX_URL}v${TOMCAT_VERSION}/bin/${TOMCAT_ARCHIVE}"
 
-if [[ ! -d "$TOMCAT_HOME" ]]; then
+# if [[ ! -d "$TOMCAT_HOME" ]]; then
 
-    TEMP_DIR="$(mktemp -d /tmp/tomcat-install.XXXXXX)"
-    trap 'rm -rf "${TEMP_DIR:-}"' EXIT
+#     TEMP_DIR="$(mktemp -d /tmp/tomcat-install.XXXXXX)"
+#     trap 'rm -rf "${TEMP_DIR:-}"' EXIT
 
-    log "Downloading Tomcat $TOMCAT_VERSION"
+#     log "Downloading Tomcat $TOMCAT_VERSION"
 
-    curl -fL --retry 3 \
-        "$TOMCAT_URL" \
-        -o "$TEMP_DIR/$TOMCAT_ARCHIVE"
+#     curl -fL --retry 3 \
+#         "$TOMCAT_URL" \
+#         -o "$TEMP_DIR/$TOMCAT_ARCHIVE"
 
-    validate $? "Downloading Tomcat"
+#     validate $? "Downloading Tomcat"
 
-    log "Downloading SHA512 checksum"
+#     log "Downloading SHA512 checksum"
 
-    curl -fsSL --retry 3 \
-        "${TOMCAT_URL}.sha512" \
-        -o "$TEMP_DIR/checksum.txt"
+#     curl -fsSL --retry 3 \
+#         "${TOMCAT_URL}.sha512" \
+#         -o "$TEMP_DIR/checksum.txt"
 
-    validate $? "Downloading checksum"
+#     validate $? "Downloading checksum"
 
-    EXPECTED_SHA="$(
-        grep -oE '[[:xdigit:]]{128}' "$TEMP_DIR/checksum.txt" |
-            head -n 1
-    )"
+#     EXPECTED_SHA="$(
+#         grep -oE '[[:xdigit:]]{128}' "$TEMP_DIR/checksum.txt" |
+#             head -n 1
+#     )"
 
-    [[ -n "$EXPECTED_SHA" ]] ||
-        die "Invalid or missing SHA512 checksum."
+#     [[ -n "$EXPECTED_SHA" ]] ||
+#         die "Invalid or missing SHA512 checksum."
 
-    ACTUAL_SHA="$(
-        sha512sum "$TEMP_DIR/$TOMCAT_ARCHIVE" |
-            awk '{print $1}'
-    )"
+#     ACTUAL_SHA="$(
+#         sha512sum "$TEMP_DIR/$TOMCAT_ARCHIVE" |
+#             awk '{print $1}'
+#     )"
 
-    [[ "${ACTUAL_SHA,,}" == "${EXPECTED_SHA,,}" ]] ||
-        die "Tomcat SHA512 verification failed."
+#     [[ "${ACTUAL_SHA,,}" == "${EXPECTED_SHA,,}" ]] ||
+#         die "Tomcat SHA512 verification failed."
 
-    log "SHA512 verification: SUCCESS"
+#     log "SHA512 verification: SUCCESS"
 
-    # Extract into a staging directory first.
-    mkdir "$TEMP_DIR/extracted"
+#     # Extract into a staging directory first.
+#     mkdir "$TEMP_DIR/extracted"
 
-    tar -xzf "$TEMP_DIR/$TOMCAT_ARCHIVE" \
-        -C "$TEMP_DIR/extracted"
+#     tar -xzf "$TEMP_DIR/$TOMCAT_ARCHIVE" \
+#         -C "$TEMP_DIR/extracted"
 
-    validate $? "Extracting Tomcat"
+#     validate $? "Extracting Tomcat"
 
-    [[ -d "$TEMP_DIR/extracted/apache-tomcat-${TOMCAT_VERSION}" ]] ||
-        die "Unexpected Tomcat archive layout."
+#     [[ -d "$TEMP_DIR/extracted/apache-tomcat-${TOMCAT_VERSION}" ]] ||
+#         die "Unexpected Tomcat archive layout."
 
-    mv "$TEMP_DIR/extracted/apache-tomcat-${TOMCAT_VERSION}" \
-        "$TOMCAT_HOME"
+#     mv "$TEMP_DIR/extracted/apache-tomcat-${TOMCAT_VERSION}" \
+#         "$TOMCAT_HOME"
 
-    validate $? "Installing Tomcat files"
+#     validate $? "Installing Tomcat files"
 
-else
-    log "Tomcat $TOMCAT_VERSION already exists; skipping download."
-fi
+# else
+#     log "Tomcat $TOMCAT_VERSION already exists; skipping download."
+# fi
 
-# ------------------------------------------------------------
-# Create Dedicated Service Account
-# ------------------------------------------------------------
+# # ------------------------------------------------------------
+# # Create Dedicated Service Account
+# # ------------------------------------------------------------
 
-if id "$TOMCAT_USER" >/dev/null 2>&1; then
-    log "Service account $TOMCAT_USER already exists."
-else
-    useradd \
-        --system \
-        --home-dir "$TOMCAT_SYMLINK" \
-        --shell /sbin/nologin \
-        "$TOMCAT_USER"
+# if id "$TOMCAT_USER" >/dev/null 2>&1; then
+#     log "Service account $TOMCAT_USER already exists."
+# else
+#     useradd \
+#         --system \
+#         --home-dir "$TOMCAT_SYMLINK" \
+#         --shell /sbin/nologin \
+#         "$TOMCAT_USER"
 
-    validate $? "Creating Tomcat service account"
-fi
+#     validate $? "Creating Tomcat service account"
+# fi
 
-# ------------------------------------------------------------
-# Configure Tomcat Admin User
-# ------------------------------------------------------------
-# Remove XML comments before changing active entries.
-# Preserve other active users and insert exactly one admin user.
+# # ------------------------------------------------------------
+# # Configure Tomcat Admin User
+# # ------------------------------------------------------------
+# # Remove XML comments before changing active entries.
+# # Preserve other active users and insert exactly one admin user.
 
-TOMCAT_USERS_FILE="$TOMCAT_HOME/conf/tomcat-users.xml"
+# TOMCAT_USERS_FILE="$TOMCAT_HOME/conf/tomcat-users.xml"
 
-[[ -f "$TOMCAT_USERS_FILE" ]] ||
-    die "Missing file: $TOMCAT_USERS_FILE"
+# [[ -f "$TOMCAT_USERS_FILE" ]] ||
+#     die "Missing file: $TOMCAT_USERS_FILE"
 
-export TOMCAT_ADMIN_USER TOMCAT_ADMIN_PASSWORD
+# export TOMCAT_ADMIN_USER TOMCAT_ADMIN_PASSWORD
 
-python3 - "$TOMCAT_USERS_FILE" <<'PYTHON'
-import os
-import re
-import sys
-import tempfile
-import xml.etree.ElementTree as ET
-from pathlib import Path
-from xml.sax.saxutils import escape, quoteattr
+# python3 - "$TOMCAT_USERS_FILE" <<'PYTHON'
+# import os
+# import re
+# import sys
+# import tempfile
+# import xml.etree.ElementTree as ET
+# from pathlib import Path
+# from xml.sax.saxutils import escape, quoteattr
 
-path = Path(sys.argv[1])
-content = path.read_text(encoding="utf-8")
+# path = Path(sys.argv[1])
+# content = path.read_text(encoding="utf-8")
 
-# Remove XML comments so example users in comments are not
-# accidentally treated as active user entries.
-content = re.sub(r"<!--.*?-->", "", content, flags=re.S)
+# # Remove XML comments so example users in comments are not
+# # accidentally treated as active user entries.
+# content = re.sub(r"<!--.*?-->", "", content, flags=re.S)
 
-username = os.environ["TOMCAT_ADMIN_USER"]
-password = os.environ["TOMCAT_ADMIN_PASSWORD"]
+# username = os.environ["TOMCAT_ADMIN_USER"]
+# password = os.environ["TOMCAT_ADMIN_PASSWORD"]
 
-# Remove any active entry for this admin username.
-user_pattern = re.compile(
-    r"<user\b(?=[^>]*\busername\s*=\s*"
-    + quoteattr(username)
-    + r")(?=[^>]*?/?>)[^>]*/\s*>",
-    flags=re.S,
-)
-content = user_pattern.sub("", content)
+# # Remove any active entry for this admin username.
+# user_pattern = re.compile(
+#     r"<user\b(?=[^>]*\busername\s*=\s*"
+#     + quoteattr(username)
+#     + r")(?=[^>]*?/?>)[^>]*/\s*>",
+#     flags=re.S,
+# )
+# content = user_pattern.sub("", content)
 
-# XML-escape the password to keep the XML valid.
-escaped_password = escape(password, {'"': "&quot;", "'": "&apos;"})
+# # XML-escape the password to keep the XML valid.
+# escaped_password = escape(password, {'"': "&quot;", "'": "&apos;"})
 
-admin_entry = (
-    f'  <user username="{username}" '
-    f'password="{escaped_password}" '
-    'roles="manager-gui,admin-gui"/>'
-)
+# admin_entry = (
+#     f'  <user username="{username}" '
+#     f'password="{escaped_password}" '
+#     'roles="manager-gui,admin-gui"/>'
+# )
 
-if not re.search(r"</tomcat-users\s*>", content, flags=re.I):
-    raise SystemExit("ERROR: Missing closing tomcat-users element.")
+# if not re.search(r"</tomcat-users\s*>", content, flags=re.I):
+#     raise SystemExit("ERROR: Missing closing tomcat-users element.")
 
-content = re.sub(
-    r"</tomcat-users\s*>",
-    admin_entry + "\n</tomcat-users>",
-    content,
-    count=1,
-    flags=re.I,
-)
+# content = re.sub(
+#     r"</tomcat-users\s*>",
+#     admin_entry + "\n</tomcat-users>",
+#     content,
+#     count=1,
+#     flags=re.I,
+# )
 
-# Validate the generated XML before replacing the original.
-ET.fromstring(content)
+# # Validate the generated XML before replacing the original.
+# ET.fromstring(content)
 
-fd, temp_name = tempfile.mkstemp(
-    prefix="tomcat-users.",
-    dir=str(path.parent),
-    text=True,
-)
+# fd, temp_name = tempfile.mkstemp(
+#     prefix="tomcat-users.",
+#     dir=str(path.parent),
+#     text=True,
+# )
 
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
+# try:
+#     with os.fdopen(fd, "w", encoding="utf-8") as stream:
+#         stream.write(content)
+#         stream.flush()
+#         os.fsync(stream.fileno())
 
-    os.chmod(temp_name, 0o640)
-    os.replace(temp_name, path)
-except Exception:
-    try:
-        os.unlink(temp_name)
-    except FileNotFoundError:
-        pass
-    raise
+#     os.chmod(temp_name, 0o640)
+#     os.replace(temp_name, path)
+# except Exception:
+#     try:
+#         os.unlink(temp_name)
+#     except FileNotFoundError:
+#         pass
+#     raise
 
-print("Tomcat admin user configured and XML validated.")
-PYTHON
+# print("Tomcat admin user configured and XML validated.")
+# PYTHON
 
-validate $? "Configuring Tomcat admin user"
+# validate $? "Configuring Tomcat admin user"
 
-unset TOMCAT_ADMIN_PASSWORD
+# unset TOMCAT_ADMIN_PASSWORD
 
 # ------------------------------------------------------------
 # Secure File Ownership and Permissions
